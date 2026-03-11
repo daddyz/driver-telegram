@@ -69,6 +69,11 @@ class TelegramDriver extends HttpDriver
         'video_chat_participants_invited',
         'web_app_data',
         'reply_markup',
+    
+        /**
+         * Handle other updates as events
+         */
+        'pre_checkout_query',
     ];
 
     protected $endpoint = 'sendMessage';
@@ -78,6 +83,9 @@ class TelegramDriver extends HttpDriver
     /** @var Collection */
     protected $queryParameters;
 
+    /** @var Request */
+    protected $request;
+
     /**
      * @param Request $request
      */
@@ -85,17 +93,22 @@ class TelegramDriver extends HttpDriver
     {
         $this->payload = new ParameterBag((array) json_decode($request->getContent(), true));
 
-        $message = $this->payload->get('message');
+        $message = $this->payload->get('message')
+            ?? $this->payload->get('edited_message');
+
         if (empty($message)) {
-            $message = $this->payload->get('edited_message');
+            if (! empty($this->payload->get('channel_post'))) {
+                $message = $this->payload->get('channel_post');
+                $message['from'] = ['id' => 0];
+            } elseif (! empty($this->payload->get('pre_checkout_query'))) {
+                $message['pre_checkout_query'] = $this->payload->get('pre_checkout_query');
+            }
         }
-        if (empty($message)) {
-            $message = $this->payload->get('channel_post');
-            $message['from'] = ['id' => 0];
-        }
+        
         $this->event = Collection::make($message);
         $this->config = Collection::make($this->config->get('telegram'));
         $this->queryParameters = Collection::make($request->query);
+        $this->request = $request;
     }
 
     /**
@@ -145,7 +158,10 @@ class TelegramDriver extends HttpDriver
             return in_array($key, ['audio', 'voice', 'video', 'photo', 'location', 'contact', 'document']);
         })->isEmpty();
 
-        return $noAttachments && (!is_null($this->event->get('from')) || !is_null($this->payload->get('callback_query'))) && !is_null($this->payload->get('update_id'));
+        return $noAttachments
+            && (! is_null($this->event->get('from')) || ! is_null($this->payload->get('callback_query')) || ! is_null($this->payload->get('pre_checkout_query')))
+            && ! is_null($this->payload->get('update_id'))
+            && $this->isValidToken();
     }
 
     /**
@@ -170,6 +186,18 @@ class TelegramDriver extends HttpDriver
         }
 
         return $event;
+    }
+
+    /**
+     * Validate the Telegram API secret token.
+     *
+     * @return bool
+     */
+    protected function isValidToken()
+    {
+        $secretToken = $this->config->get('api_secret_token');
+
+        return ! $secretToken || $this->request->headers->get('X-Telegram-Bot-Api-Secret-Token') === $secretToken;
     }
 
     /**
@@ -313,6 +341,126 @@ class TelegramDriver extends HttpDriver
     }
 
     /**
+     * @return Response
+     */
+    public function uploadsPhoto(IncomingMessage $matchingMessage)
+    {
+        $parameters = [
+            'action' => 'upload_photo',
+        ];
+
+        return $this->sendRequest('sendChatAction', $parameters, $matchingMessage);
+    }
+
+    /**
+     * @return Response
+     */
+    public function recordsVideo(IncomingMessage $matchingMessage)
+    {
+        $parameters = [
+            'action' => 'record_video',
+        ];
+
+        return $this->sendRequest('sendChatAction', $parameters, $matchingMessage);
+    }
+
+    /**
+     * @return Response
+     */
+    public function uploadsVideo(IncomingMessage $matchingMessage)
+    {
+        $parameters = [
+            'action' => 'upload_video',
+        ];
+
+        return $this->sendRequest('sendChatAction', $parameters, $matchingMessage);
+    }
+
+    /**
+     * @return Response
+     */
+    public function recordsVoice(IncomingMessage $matchingMessage)
+    {
+        $parameters = [
+            'action' => 'record_voice',
+        ];
+
+        return $this->sendRequest('sendChatAction', $parameters, $matchingMessage);
+    }
+
+    /**
+     * @return Response
+     */
+    public function uploadsVoice(IncomingMessage $matchingMessage)
+    {
+        $parameters = [
+            'action' => 'upload_voice',
+        ];
+
+        return $this->sendRequest('sendChatAction', $parameters, $matchingMessage);
+    }
+
+    /**
+     * @return Response
+     */
+    public function uploadsDocument(IncomingMessage $matchingMessage)
+    {
+        $parameters = [
+            'action' => 'upload_document',
+        ];
+
+        return $this->sendRequest('sendChatAction', $parameters, $matchingMessage);
+    }
+
+    /**
+     * @return Response
+     */
+    public function choosesSticker(IncomingMessage $matchingMessage)
+    {
+        $parameters = [
+            'action' => 'choose_sticker',
+        ];
+
+        return $this->sendRequest('sendChatAction', $parameters, $matchingMessage);
+    }
+
+    /**
+     * @return Response
+     */
+    public function findsLocation(IncomingMessage $matchingMessage)
+    {
+        $parameters = [
+            'action' => 'find_location',
+        ];
+
+        return $this->sendRequest('sendChatAction', $parameters, $matchingMessage);
+    }
+
+    /**
+     * @return Response
+     */
+    public function recordsVideoNote(IncomingMessage $matchingMessage)
+    {
+        $parameters = [
+            'action' => 'record_video_note',
+        ];
+
+        return $this->sendRequest('sendChatAction', $parameters, $matchingMessage);
+    }
+
+    /**
+     * @return Response
+     */
+    public function uploadsVideoNote(IncomingMessage $matchingMessage)
+    {
+        $parameters = [
+            'action' => 'upload_video_note',
+        ];
+
+        return $this->sendRequest('sendChatAction', $parameters, $matchingMessage);
+    }
+
+    /**
      * Convert a Question object into a valid
      * quick reply response object.
      *
@@ -420,6 +568,7 @@ class TelegramDriver extends HttpDriver
         $defaultAdditionalParameters = $this->config->get('default_additional_parameters', []);
         $parameters = array_merge_recursive([
             'chat_id' => $recipient,
+            'message_thread_id' => $matchingMessage->getPayload()['message_thread_id'] ?? null,
         ], $additionalParameters + $defaultAdditionalParameters);
 
         /*
@@ -581,6 +730,7 @@ class TelegramDriver extends HttpDriver
     {
         $parameters = array_replace_recursive([
             'chat_id' => $matchingMessage->getRecipient(),
+            'message_thread_id' => $matchingMessage->getPayload()['message_thread_id'] ?? null,
         ], $parameters);
 
         if ($this->config->get('throw_http_exceptions')) {
